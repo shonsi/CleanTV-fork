@@ -66,18 +66,15 @@ public class RaceWeekendTest {
     }
 
     @Test
-    public void countdownRoundsUpAndChangesUnits() {
-        assertEquals("1 min", RaceWeekend.countdown(Duration.ofSeconds(20)));
-        assertEquals("42 min", RaceWeekend.countdown(Duration.ofMinutes(42)));
-        assertEquals("2h 14m", RaceWeekend.countdown(Duration.ofMinutes(134)));
-        assertEquals("1d 3h", RaceWeekend.countdown(Duration.ofHours(27).plusMinutes(10)));
+    public void upcomingCountsDownWeeksAheadAndPicksTheNearestWeekend() {
+        RaceWeekend.Race mexico = new RaceWeekend.Race(19, "Mexico City Grand Prix", "Mexico City",
+                Collections.singletonList(new RaceWeekend.Session("RACE", Instant.parse("2026-11-01T20:00:00Z"))));
+        List<RaceWeekend.Race> calendar = Arrays.asList(mexico, AUSTIN);
+        RaceWeekend.State s = RaceWeekend.upcoming(calendar, Instant.parse("2026-10-01T17:30:00Z"));
+        assertSame(AUSTIN, s.race);
+        assertEquals(Duration.ofDays(22), s.untilNext);
+        assertSame(mexico, RaceWeekend.upcoming(calendar, Instant.parse("2026-10-26T00:00:00Z")).race);
+        assertNull(RaceWeekend.upcoming(calendar, Instant.parse("2026-11-02T00:00:00Z")));
     }
 
-    @Test
-    public void namesForThePanel() {
-        assertEquals("United States GP", AUSTIN.shortName());
-        assertEquals("QUALI", AUSTIN.sessions.get(3).shortName());
-        assertEquals("Qualifying", AUSTIN.sessions.get(3).title());
-        assertEquals("SQ", new RaceWeekend.Session("sprint quali", Instant.EPOCH).shortName());
-    }
 }

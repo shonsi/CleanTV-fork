@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The 5-day home-screen widget. Only views RemoteViews allows; transparent, so it sits on the launcher's backdrop. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRoot"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/widgetPlace"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:singleLine="true"
+        android:textAllCaps="true"
+        android:letterSpacing="0.22"
+        android:textColor="#8CFFFFFF"
+        android:textSize="12sp" />
+
+    <LinearLayout
+        android:id="@+id/widgetDays"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal" />
+</LinearLayout>
