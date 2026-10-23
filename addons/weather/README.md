@@ -17,7 +17,8 @@ sky-blue glow; on any other Android TV home it is an ordinary app.
   temperature instead, which counts how dry the air is: at 1 °C or below, rain and drizzle are shown as snow.
 - It reads Open-Meteo only while the page is on screen, every 30 minutes, or 5 minutes after a failure.
 - **A 5-day widget** (`ForecastWidget`): the city, the temperature now and the next five days with highs and
-  lows. The launcher shows it beside the clock with `"home_widget": "io.github.sumyabazar1.weather/.ForecastWidget"`
+  lows. The launcher shows it beside the clock when it fits, or below the top header when space is tight, with
+  `"home_widget": "io.github.sumyabazar1.weather/.ForecastWidget"`
   in a theme, after `tools/tv.py 'appwidget grantbind --package com.gathin.tvhome'` once (the TV must support
   app widgets). While a widget is placed, Android wakes it every 30 minutes for one Open-Meteo call (no air
   quality); the city is the one chosen in the app.

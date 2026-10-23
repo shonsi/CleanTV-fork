@@ -341,8 +341,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         public void run() {
             updateGreeting();
             updateRace();
-            placeHomeWidget(); the network callbacks and each return to Home; only the diya's flame follows the
-            // signal level, so only it needs this minute's binder calls (about 7 ms on the UI thread).
+            placeHomeWidget();
+            // Network callbacks refresh the Wi-Fi label; only the diya's flame needs a minute tick.
             if (festive) updateWifiLabel();
             sky.update();
             wallpaperPlayer.update();
@@ -446,6 +446,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             View.OnLayoutChangeListener place = (v, l, t, r, b, ol, ot, or, ob) -> placeHomeWidget();
             clockBlock.addOnLayoutChangeListener(place);
             homeWidget.addOnLayoutChangeListener(place);
+            findViewById(R.id.topButtons).addOnLayoutChangeListener(place);
             racePanel.addOnLayoutChangeListener(place);
         }
         showStats = cfg.showStats;
@@ -2348,46 +2349,61 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     /**
-     * The widget sits beside the clock and date text, on the side away from the top buttons, and the race panel
-     * lines up under it. Measured from the text itself, so it follows the date's length and either layout direction.
+     * The widget sits beside the clock when there is room; a wide widget moves below the header instead of
+     * covering the date or top buttons. The race panel stays aligned with the clock below the header.
      */
     private void placeHomeWidget() {
         if (widgetHost == null || homeWidget.getWidth() == 0) return;
         int[] at = new int[2];
         int[] origin = new int[2];
         root.getLocationInWindow(origin);
-        int left = Integer.MAX_VALUE, right = Integer.MIN_VALUE, clockTop = 0, clockH = 0;
+        greeting.getLocationInWindow(at);
+        int greetingTop = at[1] - origin[1];
+        int left = Integer.MAX_VALUE, right = Integer.MIN_VALUE, headerBottom = 0;
         for (int id : new int[]{R.id.clock, R.id.ampm, R.id.date, R.id.shamsiDate}) {
             TextView t = findViewById(id);
             Layout l = t.getLayout();
             if (t.getVisibility() != View.VISIBLE || l == null || t.length() == 0) continue;
             t.getLocationInWindow(at);
+            headerBottom = Math.max(headerBottom, at[1] - origin[1] + t.getHeight());
             int x0 = at[0] - origin[0] + t.getTotalPaddingLeft();
             for (int i = 0; i < l.getLineCount(); i++) {
                 left = Math.min(left, x0 + (int) l.getLineLeft(i));
                 right = Math.max(right, x0 + (int) l.getLineRight(i));
             }
-            if (id == R.id.clock) {
-                clockTop = at[1] - origin[1];
-                clockH = t.getHeight();
-            }
         }
         if (left > right) return;
-        int gap = Math.round(32 * density);
+        int gap = Math.round(24 * density);
         int w = homeWidget.getWidth(), h = homeWidget.getHeight();
         View buttons = findViewById(R.id.topButtons);
         buttons.getLocationInWindow(at);
         int buttonsLeft = at[0] - origin[0], buttonsRight = buttonsLeft + buttons.getWidth();
+        int buttonsBottom = at[1] - origin[1] + buttons.getHeight();
         boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
-        int x = rtl ? Math.max(left - gap - w, buttonsRight + gap) : Math.min(right + gap, buttonsLeft - gap - w);
-        int y = Math.max(Math.round(8 * density), clockTop + (clockH - h) / 2);
+        int edge = Math.round(56 * density);
+        int leftSlot = left - gap - w;
+        int rightSlot = right + gap;
+        boolean leftFits = leftSlot >= (rtl ? buttonsRight + gap : edge);
+        boolean rightFits = rightSlot + w <= (rtl ? root.getWidth() - edge : buttonsLeft - gap);
+        int x;
+        int y;
+        if (rtl ? leftFits : rightFits) {
+            x = rtl ? leftSlot : rightSlot;
+            y = greetingTop;
+        } else if (rtl ? rightFits : leftFits) {
+            x = rtl ? rightSlot : leftSlot;
+            y = greetingTop;
+        } else {
+            int fallback = rtl ? left - gap - w : right + gap;
+            x = Math.max(edge, Math.min(fallback, root.getWidth() - edge - w));
+            y = Math.max(headerBottom, buttonsBottom) + Math.round(12 * density);
+        }
         homeWidget.setTranslationX(x - homeWidget.getLeft());
         homeWidget.setTranslationY(y - homeWidget.getTop());
 
-        int edge = Math.round(56 * density);
-        int rx = Math.max(edge, Math.min(x, root.getWidth() - edge - racePanel.getWidth()));
+        int rx = rtl ? root.getWidth() - edge - racePanel.getWidth() : edge;
         racePanel.setTranslationX(rx - racePanel.getLeft());
-        racePanel.setTranslationY(Math.max(0, y + h + Math.round(16 * density) - racePanel.getTop()));
+        racePanel.setTranslationY(Math.max(headerBottom, y + h) + Math.round(16 * density) - racePanel.getTop());
     }
 
     private void refreshPillsAfterNextDraw() {

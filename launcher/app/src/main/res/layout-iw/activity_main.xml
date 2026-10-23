@@ -101,7 +101,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top|left"
         android:focusable="false"
-        android:descendantFocusability="blockDescendants"
+        android:descendantFocusability="blocksDescendants"
         android:visibility="gone" />
 
     <!-- Cinematic top shelf: darkens the edge behind the shelf and the lower half, so the text and the
@@ -186,55 +186,8 @@
                 android:layout_alignParentEnd="true"
                 android:layout_toEndOf="@+id/topButtons"
                 android:layout_marginStart="16dp"
-                android:orientation="horizontal"
+                android:orientation="vertical"
                 android:gravity="right|bottom">
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="bottom"
-                    android:layout_marginBottom="9dp"
-                    android:orientation="vertical">
-
-                    <!-- Shamsi date ("27 Mehr 1405"), shown when shamsi_date is on. -->
-                    <TextView
-                        android:id="@+id/shamsiDate"
-                        android:gravity="right"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:singleLine="true"
-                        android:ellipsize="end"
-                        android:textColor="#E6FFFFFF"
-                        android:textSize="17sp"
-                        android:fontFamily="@string/font_regular"
-                        android:letterSpacing="0.02"
-                        android:includeFontPadding="false"
-                        android:visibility="gone" />
-
-                    <TextClock
-                        android:id="@+id/date"
-                        android:gravity="right"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:singleLine="true"
-                        android:ellipsize="end"
-                        android:format12Hour="@string/date_format"
-                        android:format24Hour="@string/date_format"
-                        android:textColor="#A6FFFFFF"
-                        android:textSize="14sp"
-                        android:fontFamily="@string/font_regular"
-                        android:letterSpacing="0.14"
-                        android:textAllCaps="true" />
-                </LinearLayout>
-
-                <View
-                    android:layout_width="1dp"
-                    android:layout_height="26dp"
-                    android:layout_gravity="bottom"
-                    android:layout_marginStart="16dp"
-                    android:layout_marginEnd="16dp"
-                    android:layout_marginBottom="8dp"
-                    android:background="#33FFFFFF" />
 
                 <LinearLayout
                     android:layout_width="wrap_content"
@@ -290,6 +243,42 @@
                             android:includeFontPadding="false" />
                     </LinearLayout>
 
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                        <!-- Shamsi date ("27 Mehr 1405"), shown when shamsi_date is on. -->
+                        <TextView
+                            android:id="@+id/shamsiDate"
+                            android:gravity="right"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:textColor="#E6FFFFFF"
+                            android:textSize="17sp"
+                            android:fontFamily="@string/font_regular"
+                            android:letterSpacing="0.02"
+                            android:includeFontPadding="false"
+                            android:visibility="gone" />
+
+                        <TextClock
+                            android:id="@+id/date"
+                            android:gravity="right"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:format12Hour="@string/date_format"
+                            android:format24Hour="@string/date_format"
+                            android:textColor="#A6FFFFFF"
+                            android:textSize="10sp"
+                            android:fontFamily="@string/font_regular"
+                            android:letterSpacing="0.08"
+                            android:textAllCaps="true" />
+                    </LinearLayout>
+
                 </LinearLayout>
             </LinearLayout>
 
@@ -320,15 +309,14 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_alignParentStart="true"
-                android:layout_alignBottom="@id/leftBlock"
-                android:layout_marginBottom="6dp"
+                android:layout_alignParentTop="true"
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:orientation="horizontal">
 
                 <TextView
                     android:id="@+id/btnSettings"
-                    style="@style/TopButton"
+                    style="@style/TopButtonCompact"
                     android:text="@string/settings"
                     android:drawableStart="@drawable/ic_settings"
                     android:nextFocusDown="@+id/grid" />
@@ -350,7 +338,7 @@
 
                 <TextView
                     android:id="@+id/btnWifi"
-                    style="@style/TopButton"
+                    style="@style/TopButtonCompact"
                     android:maxWidth="180dp"
                     android:singleLine="true"
                     android:ellipsize="end"
@@ -360,7 +348,7 @@
 
                 <TextView
                     android:id="@+id/btnInputs"
-                    style="@style/TopButton"
+                    style="@style/TopButtonCompact"
                     android:text="@string/inputs"
                     android:drawableStart="@drawable/ic_input"
                     android:nextFocusDown="@+id/grid" />
