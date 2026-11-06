@@ -11,6 +11,7 @@ Run from the repository root: python3 -m unittest discover -s tests -v
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -58,7 +59,9 @@ def fake_trace(cold=False, frames=(), draws=(), missed=1, gpu=()):
     for i, dur in enumerate(frames):
         jank = "App Deadline Missed" if i < missed else "Buffer Stuffing"
         db.execute("insert into actual_frame_timeline_slice values (?, ?, 2, ?)", ((1060 + 20 * i) * MS, dur * MS, jank))
-    return lambda sql: [dict(r) for r in db.execute(sql)]
+    q = lambda sql: [dict(r) for r in db.execute(sql)]
+    q.close = db.close
+    return q
 
 
 class StartMetricsTest(unittest.TestCase):
@@ -76,9 +79,87 @@ class StartMetricsTest(unittest.TestCase):
         self.assertEqual(m["first frame"], 165)
         self.assertEqual((m["bindApplication"], m["activityStart"]), (40, 50))
 
+    def test_unfinished_first_draw_does_not_establish_a_completed_first_frame(self):
+        for drawn_at in (1055, 1100):
+            with self.subTest(drawn_at=drawn_at):
+                q = fake_trace(cold=True)
+                self.addCleanup(q.close)
+                q(f"update slice set ts = {drawn_at * MS}, dur = -1 where name like 'DrawFrame%'")
+                m = report.start_metrics(q, PKG)
+                self.assertEqual((m["onResume"], m["first traversal"]), (30, 20))
+                self.assertNotIn("first frame", m)
+                self.assertEqual(m["frames"], 0)
+                self.assertEqual(report.start_window(q, PKG), (900 * MS, None))
+
+    def test_unfinished_lifecycle_durations_are_unavailable(self):
+        for name, metric in (("bindApplication", "bindApplication"), ("activityStart", "activityStart"),
+                             ("performStart%", "onStart"), ("activityResume", "onResume"),
+                             ("traversal", "first traversal")):
+            with self.subTest(name=name):
+                q = fake_trace(cold=True)
+                self.addCleanup(q.close)
+                q(f"update slice set dur = -1 where name like '{name}'")
+                m = report.start_metrics(q, PKG)
+                self.assertNotIn(metric, m)
+                self.assertTrue(all(value >= 0 for value in m.values()))
+                self.assertEqual(report.start_window(q, PKG)[0], 900 * MS)
+                if name in ("activityResume", "traversal"):
+                    self.assertNotIn("first frame", m)
+                    self.assertIsNone(report.start_window(q, PKG)[1])
+                else:
+                    self.assertEqual(m["first frame"], 165)
+
+    def test_missing_render_thread_or_draw_keeps_the_traversal_fallback(self):
+        for missing in ("thread", "draw"):
+            with self.subTest(missing=missing):
+                q = fake_trace(cold=True)
+                self.addCleanup(q.close)
+                if missing == "thread":
+                    q("delete from thread where name = 'RenderThread'")
+                else:
+                    q("delete from slice where name like 'DrawFrame%'")
+                m = report.start_metrics(q, PKG)
+                self.assertEqual(m["first frame"], 160)
+                self.assertEqual(report.start_window(q, PKG), (900 * MS, 1060 * MS))
+
     def test_frames_outside_the_window_are_not_counted(self):
         m = report.start_metrics(fake_trace(draws=[(1500, 8), (2600, 8)]), PKG)
         self.assertEqual(m["frames"], 2)
+
+    def test_without_frame_timeline_keeps_start_metrics_but_not_missed_deadlines(self):
+        for other_app_frames in (False, True):
+            with self.subTest(other_app_frames=other_app_frames):
+                q = fake_trace(draws=[(1100, 8)])
+                if other_app_frames:
+                    q("insert into actual_frame_timeline_slice values (1060000000, 16000000, 3, 'None')")
+                m = report.start_metrics(q, PKG)
+                self.assertEqual(m["first frame"], 65)
+                self.assertEqual(m["frames"], 2)
+                self.assertNotIn("missed", m)
+
+    def test_frame_timeline_can_measure_zero_missed_deadlines(self):
+        m = report.start_metrics(fake_trace(frames=[16, 16], missed=0), PKG)
+        self.assertEqual(m["missed"], 0)
+
+    def test_unfinished_frame_timeline_does_not_count_as_a_missed_completed_frame(self):
+        q = fake_trace(frames=[16, 16], missed=0)
+        self.addCleanup(q.close)
+        q("update actual_frame_timeline_slice set dur = -1, jank_type = 'App Deadline Missed' "
+          "where ts = 1080000000")
+        self.assertEqual(report.start_metrics(q, PKG)["missed"], 0)
+        q("update actual_frame_timeline_slice set dur = -1")
+        self.assertNotIn("missed", report.start_metrics(q, PKG))
+
+    def test_completed_timeline_outside_the_start_window_does_not_make_its_deadlines_available(self):
+        for completed_at in (800, 2400, 3000):
+            with self.subTest(completed_at=completed_at):
+                q = fake_trace(cold=True, frames=[16])
+                self.addCleanup(q.close)
+                q("update actual_frame_timeline_slice set dur = -1")
+                q(f"insert into actual_frame_timeline_slice values ({completed_at * MS}, {16 * MS}, 2, 'None')")
+                m = report.start_metrics(q, PKG)
+                self.assertNotIn("missed", m)
+                self.assertEqual(m["first frame"], 165)
 
     def test_newest_launcher_process_is_used(self):
         self.assertEqual(report.threads(fake_trace(), PKG), (2, 1, 2))
@@ -88,6 +169,20 @@ class StartMetricsTest(unittest.TestCase):
 
 
 class NavMetricsTest(unittest.TestCase):
+    def test_frame_p90_uses_nearest_rank_for_unsorted_samples(self):
+        for n, expected in ((1, 1), (5, 5), (9, 9), (10, 9), (11, 10), (20, 18), (100, 90)):
+            with self.subTest(n=n):
+                q = fake_trace(frames=list(range(n, 0, -1)))
+                self.addCleanup(q.close)
+                self.assertEqual(report.nav_metrics(q, PKG)["frame p90"], expected)
+
+    def test_frame_p90_excludes_the_slowest_tenth_at_the_boundary(self):
+        for n in (10, 20, 100):
+            with self.subTest(n=n):
+                q = fake_trace(frames=[16] * (9 * n // 10) + [1000] * (n // 10))
+                self.addCleanup(q.close)
+                self.assertEqual(report.nav_metrics(q, PKG)["frame p90"], 16)
+
     def test_frame_times_draws_gpu_and_missed_deadlines(self):
         q = fake_trace(frames=[10, 12, 14, 16, 40], missed=2, draws=[(1100, 6), (1120, 8)], gpu=[(1101, 2), (1121, 4)])
         m = report.nav_metrics(q, PKG)
@@ -97,6 +192,76 @@ class NavMetricsTest(unittest.TestCase):
         self.assertEqual(m["draw median"], 8)
         self.assertEqual(m["gpu median"], 3)
         self.assertEqual(m["missed"], 2)
+
+    def test_without_frame_timeline_counts_draws_but_not_full_frame_times_or_deadlines(self):
+        for other_app_frames in (False, True):
+            with self.subTest(other_app_frames=other_app_frames):
+                q = fake_trace(draws=[(1100, 6), (1120, 8)], gpu=[(1101, 2), (1121, 4)])
+                if other_app_frames:
+                    q("insert into actual_frame_timeline_slice values (1060000000, 16000000, 3, 'None')")
+                m = report.nav_metrics(q, PKG)
+                self.assertEqual(m["frames"], 3)
+                self.assertEqual(m["draw median"], 8)
+                self.assertEqual(m["gpu median"], 3)
+                self.assertNotIn("frame median", m)
+                self.assertNotIn("frame p90", m)
+                self.assertNotIn("missed", m)
+
+    def test_frame_timeline_can_measure_zero_missed_deadlines(self):
+        m = report.nav_metrics(fake_trace(frames=[16, 16], missed=0), PKG)
+        self.assertEqual(m["frames"], 2)
+        self.assertEqual(m["frame median"], 16)
+        self.assertEqual(m["missed"], 0)
+
+    def test_unfinished_draw_and_gpu_wait_do_not_improve_medians(self):
+        q = fake_trace(draws=[(1100, 6)], gpu=[(1060, 4), (1100, 2)])
+        self.addCleanup(q.close)
+        q("update slice set dur = -1 where ts = 1100000000")
+        m = report.nav_metrics(q, PKG)
+        self.assertEqual(m["frames"], 1)
+        self.assertEqual(m["draw median"], 10)
+        self.assertEqual(m["gpu median"], 4)
+
+    def test_only_unfinished_draws_and_waits_have_no_measured_durations(self):
+        q = fake_trace(gpu=[(1060, 4)])
+        self.addCleanup(q.close)
+        q("update slice set dur = -1 where track_id = 20")
+        m = report.nav_metrics(q, PKG)
+        self.assertEqual(m["frames"], 0)
+        self.assertNotIn("draw median", m)
+        self.assertNotIn("gpu median", m)
+
+    def test_completed_zero_duration_slices_are_kept(self):
+        q = fake_trace(frames=[0], missed=0, gpu=[(1060, 4)])
+        self.addCleanup(q.close)
+        q("update slice set dur = 0 where track_id = 20")
+        m = report.nav_metrics(q, PKG)
+        self.assertEqual(m["frames"], 1)
+        self.assertEqual(m["frame median"], 0)
+        self.assertEqual(m["frame p90"], 0)
+        self.assertEqual(m["draw median"], 0)
+        self.assertEqual(m["gpu median"], 0)
+
+    def test_unfinished_frame_timeline_does_not_improve_frame_times_or_counts(self):
+        q = fake_trace(frames=[16, 40], missed=0)
+        self.addCleanup(q.close)
+        q("update actual_frame_timeline_slice set dur = -1, jank_type = 'App Deadline Missed' "
+          "where ts = 1080000000")
+        m = report.nav_metrics(q, PKG)
+        self.assertEqual(m["frames"], 1)
+        self.assertEqual(m["frame median"], 16)
+        self.assertEqual(m["frame p90"], 16)
+        self.assertEqual(m["missed"], 0)
+
+    def test_only_unfinished_frame_timeline_keeps_the_draw_fallback(self):
+        q = fake_trace(frames=[16])
+        self.addCleanup(q.close)
+        q("update actual_frame_timeline_slice set dur = -1")
+        m = report.nav_metrics(q, PKG)
+        self.assertEqual(m["frames"], 1)
+        self.assertEqual(m["draw median"], 10)
+        for metric in ("frame median", "frame p90", "missed"):
+            self.assertNotIn(metric, m)
 
 
 class ReportTest(unittest.TestCase):
@@ -121,6 +286,16 @@ class ReportTest(unittest.TestCase):
         text = report.report(self.RUNS, None, False, nav=False)
         self.assertNotIn("bindApplication", text)
 
+    def test_unavailable_missed_deadlines_are_distinct_from_measured_zero(self):
+        for nav in (False, True):
+            with self.subTest(nav=nav):
+                measure = report.nav_metrics if nav else report.start_metrics
+                runs = [("without-timeline", measure(fake_trace(), PKG)),
+                        ("with-timeline", measure(fake_trace(frames=[16], missed=0), PKG))]
+                text = report.report(runs, None, True, nav=nav)
+                missed = next(row for row in text.splitlines() if row.startswith("| frames that missed"))
+                self.assertEqual(missed.split(" | ")[1:], ["–", "0", "0", "0–0 |"])
+
 
 class FilesTest(unittest.TestCase):
     def test_folders_expand_in_run_order(self):
@@ -137,11 +312,197 @@ class FilesTest(unittest.TestCase):
             self.assertEqual(report.scenario_of(str(path)), "nav")
             self.assertEqual(report.scenario_of(str(Path(tmp, "cold-3.pftrace"))), "cold")
 
+    def test_non_object_sidecars_fall_back_to_the_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "nav-1.pftrace")
+            path.write_bytes(b"")
+            for text in ("[]", "null", '"nav"', "42"):
+                with self.subTest(sidecar=text):
+                    path.with_suffix(".json").write_text(text, encoding="utf-8")
+                    self.assertEqual(report.scenario_of(str(path)), "nav")
+
+    def test_object_sidecars_preserve_the_scenario_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "nav-1.pftrace")
+            path.write_bytes(b"")
+            for data, expected in (({"scenario": "cold"}, "cold"), ({}, ""),
+                                   ({"scenario": ""}, ""), ({"scenario": None}, None)):
+                with self.subTest(sidecar=data):
+                    path.with_suffix(".json").write_text(json.dumps(data), encoding="utf-8")
+                    self.assertEqual(report.scenario_of(str(path)), expected)
+
+    def test_missing_and_malformed_sidecars_fall_back_to_the_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "nav-1.pftrace")
+            path.write_bytes(b"")
+            self.assertEqual(report.scenario_of(str(path)), "nav")
+            path.with_suffix(".json").write_text("{", encoding="utf-8")
+            self.assertEqual(report.scenario_of(str(path)), "nav")
+
+    def test_unreadable_sidecars_fall_back_to_the_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "nav-1.pftrace")
+            path.write_bytes(b"")
+            path.with_suffix(".json").write_text('{"scenario": "cold"}', encoding="utf-8")
+            with mock.patch("builtins.open", side_effect=PermissionError("unreadable sidecar")):
+                self.assertEqual(report.scenario_of(str(path)), "nav")
+
     def test_missing_perfetto_says_what_to_install(self):
         with mock.patch.dict(sys.modules, {"perfetto": None, "perfetto.trace_processor": None}), \
                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
             report.opener()
         self.assertIn("requirements-perf.txt", str(caught.exception.code))
+
+
+class EnginePathTest(unittest.TestCase):
+    """--engine is judged before Perfetto is imported and before a trace is opened.
+
+    Perfetto answers a path that is not a binary with a bare Exception("Path to binary is not valid
+    (<path>)") and a file without its execute bit with PermissionError out of subprocess: both a traceback
+    with exit 1, the status a run that read a trace and failed returns, naming neither --engine nor
+    tools/trace.md. Perfetto is made unimportable here, so a value that slips past the check is answered
+    with its install line instead of an engine being started.
+    """
+
+    def refuse(self, engine):
+        """stderr from opener(engine), with the run refusing it as an argument error."""
+        err, out = io.StringIO(), io.StringIO()
+        with mock.patch.dict(sys.modules, {"perfetto": None, "perfetto.trace_processor": None}), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(out), \
+                self.assertRaises(SystemExit) as caught:
+            report.opener(engine)
+        self.assertEqual(caught.exception.code, 2, f"{engine!r} was not answered as an argument error")
+        self.assertEqual(out.getvalue(), "")
+        message = err.getvalue()
+        self.assertNotIn("Traceback", message)
+        self.assertNotIn("requirements-perf.txt", message)   # not Perfetto's answer: ours, before the import
+        self.assertIn("No trace was read.", message)
+        return message
+
+    def test_a_path_that_is_not_there_names_the_path_and_the_way_out(self):
+        message = self.refuse("/nope/trace_processor_shell")
+        self.assertIn("--engine /nope/trace_processor_shell is not a file", message)
+        self.assertIn("tools/trace.md", message)
+
+    def test_an_empty_engine_is_not_read_as_no_engine(self):
+        for engine in ("", "   "):
+            with self.subTest(engine=engine):
+                self.assertIn("--engine is empty", self.refuse(engine))
+
+    def test_a_folder_is_not_a_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            message = self.refuse(tmp)
+        self.assertIn(f"--engine {tmp} is not a file", message)
+
+    @unittest.skipUnless(os.name == "posix", "the execute bit is POSIX's; on Windows the engine is an .exe")
+    def test_a_downloaded_engine_without_its_execute_bit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp, "trace_processor_shell")
+            engine.write_bytes(b"#!/bin/sh\n")
+            engine.chmod(0o644)
+            message = self.refuse(str(engine))
+            self.assertIn(f"--engine {engine} is not executable", message)
+            self.assertIn("chmod +x", message)
+
+    def test_an_engine_that_can_be_run_still_reaches_perfetto(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp, "trace_processor_shell")
+            engine.write_bytes(b"#!/bin/sh\n")
+            engine.chmod(0o755)
+            with mock.patch.dict(sys.modules, {"perfetto": None, "perfetto.trace_processor": None}), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                report.opener(str(engine))
+        self.assertIn("requirements-perf.txt", str(caught.exception.code),
+                      "the good path was refused instead of tried")
+
+    def test_no_engine_at_all_is_left_to_perfetto_to_download(self):
+        with mock.patch.dict(sys.modules, {"perfetto": None, "perfetto.trace_processor": None}), \
+                contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as caught:
+            report.opener(None)
+        self.assertIn("requirements-perf.txt", str(caught.exception.code))
+
+    def test_the_report_answers_a_typo_before_it_reads_the_trace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp, "home-1.pftrace")
+            trace.write_bytes(b"")
+            with contextlib.redirect_stderr(io.StringIO()) as err, \
+                    contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as caught:
+                report.main([str(trace), "--engine", "/nope/trace_processor_shell"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("/nope/trace_processor_shell is not a file", err.getvalue())
+
+
+class MainTest(unittest.TestCase):
+    def open_trace(self, path):
+        q = fake_trace(frames=[16])
+        return q, q.close
+
+    def trace(self, folder, name, scenario=None):
+        path = Path(folder, name + ".pftrace")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+        if scenario is not None:
+            path.with_suffix(".json").write_text(json.dumps({"scenario": scenario}))
+        return str(path)
+
+    def assert_rejected_before_opening_engine(self, argv):
+        with mock.patch.object(report, "opener", return_value=self.open_trace) as opener, \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(SystemExit, "nav.*start.*separately"):
+                report.main(argv)
+            opener.assert_not_called()
+
+    def test_mixed_folder_is_rejected_in_either_input_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mixed, starts = Path(tmp, "mixed"), Path(tmp, "starts")
+            self.trace(mixed, "cold-1")
+            self.trace(mixed, "nav-1")
+            self.trace(starts, "home-1")
+            for argv in ([str(mixed)], [str(starts), "--vs", str(mixed)]):
+                with self.subTest(argv=argv):
+                    self.assert_rejected_before_opening_engine(argv)
+
+    def test_vs_rejects_nav_against_start_in_both_directions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nav = self.trace(tmp, "nav-1")
+            start = self.trace(tmp, "cold-1")
+            for before, after in ((nav, start), (start, nav)):
+                with self.subTest(before=before):
+                    self.assert_rejected_before_opening_engine([before, "--vs", after])
+
+    def test_sidecar_can_make_matching_file_names_incompatible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cold = self.trace(tmp, "cold-1")
+            renamed_nav = self.trace(tmp, "cold-2", scenario="nav")
+            self.assert_rejected_before_opening_engine([cold, renamed_nav])
+
+    def test_sidecar_can_make_different_file_names_a_valid_nav_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nav = self.trace(tmp, "nav-1")
+            renamed_nav = self.trace(tmp, "cold-2", scenario="nav")
+            with mock.patch.object(report, "opener", return_value=self.open_trace), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                report.main([nav, renamed_nav, "--markdown"])
+            self.assertIn("| frame time, median (ms) |", out.getvalue())
+            self.assertNotIn("| frames drawn in 1.5 s |", out.getvalue())
+
+    def test_matching_nav_and_start_sets_still_report_and_compare(self):
+        for scenarios, label in ((["nav"], "| frame time, median (ms) |"),
+                                 (["cold", "home", "coldsys", "custom"], "| frames drawn in 1.5 s |")):
+            with self.subTest(scenarios=scenarios), tempfile.TemporaryDirectory() as tmp:
+                before, after = Path(tmp, "before"), Path(tmp, "after")
+                for folder in (before, after):
+                    for name in scenarios:
+                        self.trace(folder, name + "-1")
+                open_trace = mock.Mock(side_effect=self.open_trace)
+                with mock.patch.object(report, "opener", return_value=open_trace) as opener, \
+                        contextlib.redirect_stdout(io.StringIO()) as out:
+                    report.main([str(before), "--vs", str(after), "--markdown"])
+                opener.assert_called_once_with(None)
+                self.assertEqual(open_trace.call_count, 2 * len(scenarios))
+                self.assertIn(label, out.getvalue())
+                self.assertIn("Change in the median:", out.getvalue())
 
 
 @unittest.skipUnless(os.environ.get("CLEANYOURTV_TRACE") and importlib.util.find_spec("perfetto"),

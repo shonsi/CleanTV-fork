@@ -130,41 +130,25 @@ final class RaceWeekend {
         for (Race race : calendar) {
             if (race.sessions.isEmpty()) continue;
             Instant opens = race.sessions.get(0).start.minus(LEAD);
-            if (now.isBefore(opens) || !now.isBefore(closes(race))) continue;
-            return state(race, now);
+            Instant closes = race.sessions.get(race.sessions.size() - 1).start.plus(TAIL);
+            if (now.isBefore(opens) || !now.isBefore(closes)) continue;
+
+            List<Status> statuses = new ArrayList<>();
+            Session live = null, next = null;
+            for (Session s : race.sessions) {
+                if (now.isBefore(s.start)) {
+                    statuses.add(next == null ? Status.NEXT : Status.LATER);
+                    if (next == null) next = s;
+                } else if (now.isBefore(s.start.plus(s.length()))) {
+                    statuses.add(Status.LIVE);
+                    live = s;
+                } else {
+                    statuses.add(Status.DONE);
+                }
+            }
+            return new State(race, statuses, live, next, next == null ? null : Duration.between(now, next.start));
         }
         return null;
-    }
-
-    /** The next weekend that has not closed yet, however far off (race_panel_always), or null when none is left. */
-    static State upcoming(List<Race> calendar, Instant now) {
-        Race best = null;
-        for (Race race : calendar) {
-            if (race.sessions.isEmpty() || !now.isBefore(closes(race))) continue;
-            if (best == null || closes(race).isBefore(closes(best))) best = race;
-        }
-        return best == null ? null : state(best, now);
-    }
-
-    private static Instant closes(Race race) {
-        return race.sessions.get(race.sessions.size() - 1).start.plus(TAIL);
-    }
-
-    private static State state(Race race, Instant now) {
-        List<Status> statuses = new ArrayList<>();
-        Session live = null, next = null;
-        for (Session s : race.sessions) {
-            if (now.isBefore(s.start)) {
-                statuses.add(next == null ? Status.NEXT : Status.LATER);
-                if (next == null) next = s;
-            } else if (now.isBefore(s.start.plus(s.length()))) {
-                statuses.add(Status.LIVE);
-                live = s;
-            } else {
-                statuses.add(Status.DONE);
-            }
-        }
-        return new State(race, statuses, live, next, next == null ? null : Duration.between(now, next.start));
     }
 
     /**

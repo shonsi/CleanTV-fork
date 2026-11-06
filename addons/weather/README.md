@@ -16,13 +16,30 @@ sky-blue glow; on any other Android TV home it is an ordinary app.
   "light rain" at 1 °C (ICON and GFS did, in a Ulaanbaatar blizzard). The app decides by the wet-bulb
   temperature instead, which counts how dry the air is: at 1 °C or below, rain and drizzle are shown as snow.
 - It reads Open-Meteo only while the page is on screen, every 30 minutes, or 5 minutes after a failure.
-- **A 5-day widget** (`ForecastWidget`): the city, the temperature now and the next five days with highs and
-  lows. The launcher shows it beside the clock when it fits, or below the top header when space is tight, with
-  `"home_widget": "io.github.sumyabazar1.weather/.ForecastWidget"`
-  in a theme, after `tools/tv.py 'appwidget grantbind --package com.gathin.tvhome'` once (the TV must support
-  app widgets). While a widget is placed, Android wakes it every 30 minutes for one Open-Meteo call (no air
-  quality); the city is the one chosen in the app.
-- Degrees Celsius, English words; day names follow the TV's language.
+- Degrees Celsius by default (Fahrenheit is an option below); English or French words, with the TV's language; day names follow the TV's language.
+
+## Options
+
+Open **Weather settings** beside **Change city** at the bottom of the page. Use Up/Down and OK to change
+units, forecast length, both units, humidity and wind. Back cancels a unit/day picker; **Done** or Back
+closes settings. Choices are saved on this TV and survive closing the app and restarting the TV.
+
+Display changes use the current reading, without another network request or changing its update time.
+Changing the forecast length fetches once when settings closes. **Reset weather settings** restores the
+build defaults without changing the city.
+
+`app/src/main/res/values/options.xml` still sets the defaults for a fresh installation and for Reset.
+Saved choices override these defaults. With no saved choices the page is as above.
+
+| Option | Default | What it does |
+|---|---|---|
+| `forecast_days` | `3` | Days in the forecast row after today, 3 to 7. Above 3 the day cards share the row, with short day names, so a week fits on screen. |
+| `show_humidity` | `false` | The relative humidity now, after "Feels like". |
+| `show_wind` | `false` | The wind speed now in km/h, after "Feels like" (mph with `temperature_unit` `f`). |
+| `temperature_unit` | `c` | `f` shows degrees Fahrenheit for the temperature now, feels-like and the days' highs and lows, converted from the reading before rounding. |
+| `show_both_units` | `false` | The temperature now in the other unit too, at the start of the "Feels like" line ("22°C · Feels like 70°"). |
+
+![A week, with humidity and wind](https://raw.githubusercontent.com/majnioui/cleanyourtv-contrib/pr-assets/addon-weather-week/weather-options.png)
 
 ## Permissions
 
@@ -31,8 +48,7 @@ sky-blue glow; on any other Android TV home it is an ordinary app.
 | `INTERNET` | Open-Meteo: the place search, the weather and the air quality. |
 
 That is all. What is sent: the city name you type in the search, then that place's latitude and longitude. No
-account, no telemetry, no ads, no background service, no location permission. The widget, only while one is
-placed, is updated by Android every 30 minutes. The chosen city stays in the
+account, no telemetry, no ads, no background service, no location permission. The chosen city stays in the
 app's own storage (backups are off).
 
 ## Build and install
@@ -55,6 +71,8 @@ with your own key if you hand them out; the launcher pins its Show answer to the
 
 Hisense SmartTV 4K FFM (lushan, MediaTek MT9676), Google TV 12 / Android 12: city search with the TV keyboard,
 the weather page, the card prompt, and the card shown in the launcher's dock.
+
+The options: Xiaomi TV (MiTV-MOOR2), Google TV 11, with `forecast_days` 7, `show_humidity` and `show_wind` on.
 
 ## Maintainer
 

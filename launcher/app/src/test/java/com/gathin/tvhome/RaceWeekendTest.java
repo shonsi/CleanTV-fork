@@ -65,16 +65,4 @@ public class RaceWeekendTest {
         assertNull(RaceWeekend.at(CALENDAR, Instant.parse("2026-10-26T00:00:00Z")));
     }
 
-    @Test
-    public void upcomingCountsDownWeeksAheadAndPicksTheNearestWeekend() {
-        RaceWeekend.Race mexico = new RaceWeekend.Race(19, "Mexico City Grand Prix", "Mexico City",
-                Collections.singletonList(new RaceWeekend.Session("RACE", Instant.parse("2026-11-01T20:00:00Z"))));
-        List<RaceWeekend.Race> calendar = Arrays.asList(mexico, AUSTIN);
-        RaceWeekend.State s = RaceWeekend.upcoming(calendar, Instant.parse("2026-10-01T17:30:00Z"));
-        assertSame(AUSTIN, s.race);
-        assertEquals(Duration.ofDays(22), s.untilNext);
-        assertSame(mexico, RaceWeekend.upcoming(calendar, Instant.parse("2026-10-26T00:00:00Z")).race);
-        assertNull(RaceWeekend.upcoming(calendar, Instant.parse("2026-11-02T00:00:00Z")));
-    }
-
 }
