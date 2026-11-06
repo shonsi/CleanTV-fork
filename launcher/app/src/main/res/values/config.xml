@@ -276,7 +276,7 @@
     <bool name="show_stats">false</bool>
 
     <!-- An installed app's home-screen widget beside the clock, as "package/receiver", for example
-         "io.github.sumyabazar1.weather/.ForecastWidget" (addons/weather). Empty: no widget and nothing runs.
+         "io.github.sumyabazar1.weather/.ForecastWidget". Empty: no widget and nothing runs.
          The launcher binds it once, which needs the shell command "appwidget grantbind" for com.gathin.tvhome
          (themes/README.md has the line) and a TV with app widget support. Can also be set with "home_widget" in a theme. -->
     <string name="home_widget" translatable="false"></string>
